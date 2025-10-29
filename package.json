@@ -1,0 +1,27 @@
+{
+  "name": "shopify-unimtx-webhook",
+  "version": "1.0.0",
+  "description": "Webhook server for Shopify to UniMTX integration",
+  "main": "shopify-webhook-server.js",
+  "scripts": {
+    "start": "node shopify-webhook-server.js",
+    "dev": "node webhook-server.js",
+    "test": "node test-unimtx-simple.js"
+  },
+  "keywords": [
+    "shopify",
+    "whatsapp",
+    "sms",
+    "unimtx",
+    "webhook"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
+
