@@ -755,17 +755,7 @@ function mapOrderStatus(order, fulfillmentStageMetafield, orderStatusMetafield) 
     return 'cancelled';
   }
   
-  // Priority 2: Check custom order_status metafield (for payment_checking state)
-  // This is automatically set when customer uploads payment slip
-  if (orderStatusMetafield && orderStatusMetafield.value) {
-    const status = orderStatusMetafield.value.toLowerCase();
-    // Valid values: 'payment_checking', 'confirmed', 'processing', 'shipped', 'delivered'
-    if (['payment_checking', 'confirmed', 'processing', 'shipped', 'delivered'].includes(status)) {
-      return status;
-    }
-  }
-  
-  // Priority 3: Check custom fulfillment_stage metafield
+  // Priority 2: Check custom fulfillment_stage metafield FIRST (highest priority for later stages)
   // This gives admin control over processing, shipped, delivered stages
   if (fulfillmentStageMetafield && fulfillmentStageMetafield.value) {
     const stage = fulfillmentStageMetafield.value.toLowerCase();
@@ -775,13 +765,33 @@ function mapOrderStatus(order, fulfillmentStageMetafield, orderStatusMetafield) 
     }
   }
   
+  // Priority 3: Check if order_status metafield is at a later stage
+  // If it's already processing, shipped, or delivered, keep it
+  if (orderStatusMetafield && orderStatusMetafield.value) {
+    const status = orderStatusMetafield.value.toLowerCase();
+    if (['processing', 'shipped', 'delivered'].includes(status)) {
+      return status;
+    }
+  }
+  
   // Priority 4: Check if admin marked order as paid in Shopify
   // When financial_status = 'paid', order is confirmed
+  // This overrides payment_checking state
   if (order.financial_status === 'paid') {
     return 'confirmed';
   }
   
-  // Priority 5: Check if payment is pending
+  // Priority 5: Check custom order_status metafield for early stages
+  // This handles payment_checking and confirmed states
+  if (orderStatusMetafield && orderStatusMetafield.value) {
+    const status = orderStatusMetafield.value.toLowerCase();
+    // Valid values: 'payment_checking', 'confirmed'
+    if (['payment_checking', 'confirmed'].includes(status)) {
+      return status;
+    }
+  }
+  
+  // Priority 6: Check if payment is pending
   // financial_status can be: 'pending', 'authorized', 'partially_paid', 'partially_refunded', 'voided', 'refunded'
   if (order.financial_status === 'pending' || 
       order.financial_status === 'authorized' || 
