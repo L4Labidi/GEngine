@@ -106,6 +106,47 @@ function makeShopifyRequest(endpoint, method = 'GET', data = null) {
   });
 }
 
+function makeShopifyGraphQLRequest(query) {
+  const https = require('https');
+  
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({ query });
+    
+    const options = {
+      hostname: CONFIG.shopifyDomain,
+      port: 443,
+      path: '/admin/api/2024-01/graphql.json',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+        'X-Shopify-Access-Token': CONFIG.accessToken
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let responseBody = '';
+      res.on('data', (chunk) => (responseBody += chunk));
+      res.on('end', () => {
+        try {
+          const jsonResponse = JSON.parse(responseBody);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(jsonResponse);
+          } else {
+            reject(new Error(`Shopify GraphQL Error: ${res.statusCode} - ${JSON.stringify(jsonResponse)}`));
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse GraphQL response: ${responseBody.substring(0, 200)}`));
+        }
+      });
+    });
+
+    req.on('error', (e) => reject(e));
+    req.write(postData);
+    req.end();
+  });
+}
+
 // ==========================================
 // ROUTES
 // ==========================================
@@ -200,8 +241,11 @@ app.get('/api/order/:orderNumber', async (req, res) => {
       cancelled: order.cancelled_at !== null,
       cancelledAt: order.cancelled_at,
       
-      // Payment slip
-      paymentSlip: paymentSlipMetafield ? JSON.parse(paymentSlipMetafield.value) : null,
+      // Payment slip (file_reference type - contains Shopify file ID)
+      paymentSlip: paymentSlipMetafield ? {
+        fileId: paymentSlipMetafield.value,
+        uploaded: true
+      } : null,
       
       // Calculate if can cancel (within 3 days)
       canCancel: canCancelOrder(order)
@@ -249,23 +293,122 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
     
     const order = ordersResponse.orders[0];
     
-    // Convert file to base64 (for storing in metafield)
-    const fileBase64 = req.file.buffer.toString('base64');
-    const fileData = {
-      filename: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      uploadedAt: new Date().toISOString(),
-      data: fileBase64
-    };
+    console.log('Uploading file to Shopify Files...');
     
-    // Create or update metafield
+    // Step 1: Stage the file upload
+    const stagedUploadResponse = await makeShopifyGraphQLRequest(`
+      mutation generateStagedUploads {
+        stagedUploadsCreate(input: {
+          resource: FILE
+          filename: "${req.file.originalname}"
+          mimeType: "${req.file.mimetype}"
+          httpMethod: POST
+        }) {
+          stagedTargets {
+            url
+            resourceUrl
+            parameters {
+              name
+              value
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `);
+    
+    if (stagedUploadResponse.data?.stagedUploadsCreate?.userErrors?.length > 0) {
+      throw new Error(`Staged upload error: ${JSON.stringify(stagedUploadResponse.data.stagedUploadsCreate.userErrors)}`);
+    }
+    
+    const stagedTarget = stagedUploadResponse.data.stagedUploadsCreate.stagedTargets[0];
+    console.log('Staged upload URL:', stagedTarget.url);
+    
+    // Step 2: Upload the actual file to the staged URL
+    const FormData = require('form-data');
+    const form = new FormData();
+    
+    // Add all parameters from staged upload
+    stagedTarget.parameters.forEach(param => {
+      form.append(param.name, param.value);
+    });
+    
+    // Add the file
+    form.append('file', req.file.buffer, {
+      filename: req.file.originalname,
+      contentType: req.file.mimetype
+    });
+    
+    // Upload to S3/GCS
+    const https = require('https');
+    const uploadUrl = new URL(stagedTarget.url);
+    
+    await new Promise((resolve, reject) => {
+      const request = https.request({
+        hostname: uploadUrl.hostname,
+        path: uploadUrl.pathname + uploadUrl.search,
+        method: 'POST',
+        headers: form.getHeaders()
+      }, (response) => {
+        let data = '';
+        response.on('data', chunk => data += chunk);
+        response.on('end', () => {
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            console.log('File uploaded successfully to storage');
+            resolve();
+          } else {
+            reject(new Error(`Upload failed: ${response.statusCode} - ${data}`));
+          }
+        });
+      });
+      
+      request.on('error', reject);
+      form.pipe(request);
+    });
+    
+    // Step 3: Create the file in Shopify
+    const fileCreateResponse = await makeShopifyGraphQLRequest(`
+      mutation fileCreate {
+        fileCreate(files: {
+          alt: "Payment slip for order ${order.name}"
+          contentType: IMAGE
+          originalSource: "${stagedTarget.resourceUrl}"
+        }) {
+          files {
+            id
+            alt
+            createdAt
+            ... on MediaImage {
+              image {
+                url
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `);
+    
+    if (fileCreateResponse.data?.fileCreate?.userErrors?.length > 0) {
+      throw new Error(`File create error: ${JSON.stringify(fileCreateResponse.data.fileCreate.userErrors)}`);
+    }
+    
+    const uploadedFile = fileCreateResponse.data.fileCreate.files[0];
+    console.log('File created in Shopify:', uploadedFile.id);
+    
+    // Step 4: Create or update metafield with file reference
     const metafieldData = {
       metafield: {
         namespace: 'custom',
         key: 'payment_slip',
-        value: JSON.stringify(fileData),
-        type: 'json'
+        value: uploadedFile.id,
+        type: 'file_reference'
       }
     };
     
