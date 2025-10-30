@@ -205,6 +205,14 @@ app.get('/api/order/:orderNumber', async (req, res) => {
       id: order.id,
       number: order.name,
       date: new Date(order.created_at).toLocaleDateString('ar-SA'),
+      dateTime: new Date(order.created_at).toLocaleString('ar-SA', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      }),
       createdAt: order.created_at,
       status: mapOrderStatus(order, fulfillmentStageMetafield),
       email: order.email,
