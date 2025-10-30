@@ -210,6 +210,16 @@ app.get('/api/order/:orderNumber', async (req, res) => {
       email: order.email,
       phone: order.phone || order.customer?.phone,
       
+      // Customer information
+      customer: {
+        name: order.customer 
+          ? `${order.customer.first_name || ''} ${order.customer.last_name || ''}`.trim() 
+          : (order.shipping_address ? `${order.shipping_address.first_name || ''} ${order.shipping_address.last_name || ''}`.trim() : 'N/A'),
+        phone: order.customer?.phone || order.shipping_address?.phone || order.billing_address?.phone || 'N/A',
+        email: order.email || order.customer?.email || 'N/A',
+        address: order.shipping_address || order.billing_address || {}
+      },
+      
       // Items
       items: order.line_items.map(item => ({
         id: item.id,
