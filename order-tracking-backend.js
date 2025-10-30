@@ -573,7 +573,7 @@ app.get('/api/order/:orderNumber/payment-slip-image', async (req, res) => {
     );
     
     const paymentSlipMetafield = metafields.metafields.find(
-      mf => mf.namespace === 'custom' && mf.key === 'payment_slip_image'
+      mf => mf.namespace === 'custom' && mf.key === 'payment_slip'
     );
     
     if (!paymentSlipMetafield || !paymentSlipMetafield.value) {
