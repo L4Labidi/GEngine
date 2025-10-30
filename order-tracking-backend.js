@@ -19,10 +19,10 @@ const CONFIG = {
   accessToken: process.env.SHOPIFY_ACCESS_TOKEN || 'your-admin-api-access-token',
   port: process.env.PORT || 3001,
   
-  // File upload settings
+  // File upload settings (images only for payment slips)
   uploadPath: './uploads',
-  maxFileSize: 5 * 1024 * 1024, // 5MB
-  allowedFileTypes: ['image/jpeg', 'image/png', 'image/jpg', 'application/pdf'],
+  maxFileSize: 10 * 1024 * 1024, // 10MB (increased for phone camera photos)
+  allowedFileTypes: ['image/jpeg', 'image/png', 'image/jpg', 'image/webp', 'image/heic', 'image/heif'],
 };
 
 // ==========================================
@@ -52,7 +52,7 @@ const upload = multer({
     if (CONFIG.allowedFileTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('نوع الملف غير مدعوم. يرجى تحميل صورة أو PDF فقط.'));
+      cb(new Error('نوع الملف غير مدعوم. يرجى تحميل صورة فقط (JPG, PNG, WEBP).'));
     }
   }
 });
@@ -80,15 +80,18 @@ function makeShopifyRequest(endpoint, method = 'GET', data = null) {
       let responseBody = '';
       res.on('data', (chunk) => (responseBody += chunk));
       res.on('end', () => {
+        console.log(`API Response Status: ${res.statusCode}`);
+        console.log(`API Response Body: ${responseBody.substring(0, 500)}`); // First 500 chars
+        
         try {
           const jsonResponse = JSON.parse(responseBody);
           if (res.statusCode >= 200 && res.statusCode < 300) {
             resolve(jsonResponse);
           } else {
-            reject(new Error(`Shopify API Error: ${res.statusCode} - ${responseBody}`));
+            reject(new Error(`Shopify API Error: ${res.statusCode} - ${JSON.stringify(jsonResponse)}`));
           }
         } catch (e) {
-          reject(new Error(`Failed to parse JSON response: ${responseBody}`));
+          reject(new Error(`Failed to parse JSON response. Status: ${res.statusCode}, Body: ${responseBody.substring(0, 200)}`));
         }
       });
     });
@@ -141,7 +144,7 @@ app.get('/api/order/:orderNumber', async (req, res) => {
     const order = ordersResponse.orders[0];
     console.log('Order found:', order.name);
     
-    // Get order metafields (for payment slip)
+    // Get order metafields (for payment slip and fulfillment stage)
     const metafieldsResponse = await makeShopifyRequest(
       `orders/${order.id}/metafields.json`
     );
@@ -151,13 +154,18 @@ app.get('/api/order/:orderNumber', async (req, res) => {
       mf => mf.namespace === 'custom' && mf.key === 'payment_slip'
     );
     
+    // Find fulfillment stage metafield
+    const fulfillmentStageMetafield = metafieldsResponse.metafields?.find(
+      mf => mf.namespace === 'custom' && mf.key === 'fulfillment_stage'
+    );
+    
     // Transform order data to our format
     const orderData = {
       id: order.id,
       number: order.name,
       date: new Date(order.created_at).toLocaleDateString('ar-SA'),
       createdAt: order.created_at,
-      status: mapOrderStatus(order),
+      status: mapOrderStatus(order, fulfillmentStageMetafield),
       email: order.email,
       phone: order.phone || order.customer?.phone,
       
@@ -428,35 +436,37 @@ app.post('/api/order/:orderNumber/cancel', async (req, res) => {
 // HELPER FUNCTIONS
 // ==========================================
 
-function mapOrderStatus(order) {
-  // Map Shopify order status to our custom statuses
+function mapOrderStatus(order, fulfillmentStageMetafield) {
+  // Priority 1: Check if order is cancelled (by admin or customer)
   if (order.cancelled_at) {
     return 'cancelled';
   }
   
-  if (order.fulfillment_status === 'fulfilled') {
-    return 'delivered';
+  // Priority 2: Check custom fulfillment_stage metafield
+  // This gives admin full control over processing, shipped, delivered stages
+  if (fulfillmentStageMetafield && fulfillmentStageMetafield.value) {
+    const stage = fulfillmentStageMetafield.value.toLowerCase();
+    // Valid values: 'processing', 'shipped', 'delivered'
+    if (['processing', 'shipped', 'delivered'].includes(stage)) {
+      return stage;
+    }
   }
   
-  if (order.fulfillment_status === 'partial' || order.fulfillment_status === 'shipped') {
-    return 'shipped';
-  }
-  
-  // Check for payment-confirmed tag
-  const tags = order.tags ? order.tags.split(', ') : [];
-  if (tags.includes('payment-confirmed')) {
-    return 'processing';
-  }
-  
+  // Priority 3: Check if admin marked order as paid in Shopify
+  // When financial_status = 'paid', order is confirmed
   if (order.financial_status === 'paid') {
     return 'confirmed';
   }
   
-  if (order.financial_status === 'pending' || order.financial_status === 'authorized') {
+  // Priority 4: Check if payment is pending
+  // financial_status can be: 'pending', 'authorized', 'partially_paid', 'partially_refunded', 'voided', 'refunded'
+  if (order.financial_status === 'pending' || 
+      order.financial_status === 'authorized' || 
+      order.financial_status === 'partially_paid') {
     return 'pending_payment';
   }
   
-  // Default
+  // Default: pending payment
   return 'pending_payment';
 }
 
