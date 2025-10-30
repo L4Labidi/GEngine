@@ -200,6 +200,11 @@ app.get('/api/order/:orderNumber', async (req, res) => {
       mf => mf.namespace === 'custom' && mf.key === 'fulfillment_stage'
     );
     
+    // Find order status metafield
+    const orderStatusMetafield = metafieldsResponse.metafields?.find(
+      mf => mf.namespace === 'custom' && mf.key === 'order_status'
+    );
+    
     // Transform order data to our format
     const orderData = {
       id: order.id,
@@ -214,7 +219,7 @@ app.get('/api/order/:orderNumber', async (req, res) => {
         hour12: true
       }),
       createdAt: order.created_at,
-      status: mapOrderStatus(order, fulfillmentStageMetafield),
+      status: mapOrderStatus(order, fulfillmentStageMetafield, orderStatusMetafield),
       email: order.email,
       phone: order.phone || order.customer?.phone,
       
@@ -744,14 +749,24 @@ app.post('/api/order/:orderNumber/cancel', async (req, res) => {
 // HELPER FUNCTIONS
 // ==========================================
 
-function mapOrderStatus(order, fulfillmentStageMetafield) {
+function mapOrderStatus(order, fulfillmentStageMetafield, orderStatusMetafield) {
   // Priority 1: Check if order is cancelled (by admin or customer)
   if (order.cancelled_at) {
     return 'cancelled';
   }
   
-  // Priority 2: Check custom fulfillment_stage metafield
-  // This gives admin full control over processing, shipped, delivered stages
+  // Priority 2: Check custom order_status metafield (for payment_checking state)
+  // This is automatically set when customer uploads payment slip
+  if (orderStatusMetafield && orderStatusMetafield.value) {
+    const status = orderStatusMetafield.value.toLowerCase();
+    // Valid values: 'payment_checking', 'confirmed', 'processing', 'shipped', 'delivered'
+    if (['payment_checking', 'confirmed', 'processing', 'shipped', 'delivered'].includes(status)) {
+      return status;
+    }
+  }
+  
+  // Priority 3: Check custom fulfillment_stage metafield
+  // This gives admin control over processing, shipped, delivered stages
   if (fulfillmentStageMetafield && fulfillmentStageMetafield.value) {
     const stage = fulfillmentStageMetafield.value.toLowerCase();
     // Valid values: 'processing', 'shipped', 'delivered'
@@ -760,13 +775,13 @@ function mapOrderStatus(order, fulfillmentStageMetafield) {
     }
   }
   
-  // Priority 3: Check if admin marked order as paid in Shopify
+  // Priority 4: Check if admin marked order as paid in Shopify
   // When financial_status = 'paid', order is confirmed
   if (order.financial_status === 'paid') {
     return 'confirmed';
   }
   
-  // Priority 4: Check if payment is pending
+  // Priority 5: Check if payment is pending
   // financial_status can be: 'pending', 'authorized', 'partially_paid', 'partially_refunded', 'voided', 'refunded'
   if (order.financial_status === 'pending' || 
       order.financial_status === 'authorized' || 
