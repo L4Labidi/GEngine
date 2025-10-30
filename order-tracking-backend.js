@@ -455,6 +455,37 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       );
     }
     
+    // Update order status to "payment_checking"
+    const statusMetafieldData = {
+      metafield: {
+        namespace: 'custom',
+        key: 'order_status',
+        value: 'payment_checking',
+        type: 'single_line_text_field'
+      }
+    };
+    
+    // Check if status metafield exists
+    const existingStatusMetafield = metafieldsResponse.metafields?.find(
+      mf => mf.namespace === 'custom' && mf.key === 'order_status'
+    );
+    
+    if (existingStatusMetafield) {
+      // Update existing status metafield
+      await makeShopifyRequest(
+        `orders/${order.id}/metafields/${existingStatusMetafield.id}.json`,
+        'PUT',
+        statusMetafieldData
+      );
+    } else {
+      // Create new status metafield
+      await makeShopifyRequest(
+        `orders/${order.id}/metafields.json`,
+        'POST',
+        statusMetafieldData
+      );
+    }
+    
     // Add a note to the order
     const noteData = {
       note: {
@@ -473,7 +504,7 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       console.log('⚠️ Could not add note to order:', noteError.message);
     }
     
-    console.log('✅ Payment slip uploaded successfully');
+    console.log('✅ Payment slip uploaded successfully, status changed to payment_checking');
     
     res.json({
       success: true,
