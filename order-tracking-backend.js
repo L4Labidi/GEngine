@@ -456,6 +456,17 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
     }
     
     // Update order status to "payment_checking"
+    console.log('📝 Updating order status to payment_checking...');
+    
+    // Fetch current metafields to check if order_status exists
+    const currentMetafieldsResponse = await makeShopifyRequest(
+      `orders/${order.id}/metafields.json`
+    );
+    
+    const existingStatusMetafield = currentMetafieldsResponse.metafields?.find(
+      mf => mf.namespace === 'custom' && mf.key === 'order_status'
+    );
+    
     const statusMetafieldData = {
       metafield: {
         namespace: 'custom',
@@ -465,13 +476,9 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       }
     };
     
-    // Check if status metafield exists
-    const existingStatusMetafield = metafieldsResponse.metafields?.find(
-      mf => mf.namespace === 'custom' && mf.key === 'order_status'
-    );
-    
     if (existingStatusMetafield) {
       // Update existing status metafield
+      console.log('Updating existing order_status metafield...');
       await makeShopifyRequest(
         `orders/${order.id}/metafields/${existingStatusMetafield.id}.json`,
         'PUT',
@@ -479,12 +486,15 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       );
     } else {
       // Create new status metafield
+      console.log('Creating new order_status metafield...');
       await makeShopifyRequest(
         `orders/${order.id}/metafields.json`,
         'POST',
         statusMetafieldData
       );
     }
+    
+    console.log('✅ Order status updated to payment_checking');
     
     // Add a note to the order
     const noteData = {
