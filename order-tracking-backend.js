@@ -228,7 +228,7 @@ app.get('/api/order/:orderNumber', async (req, res) => {
         quantity: item.quantity,
         price: `${parseFloat(item.price).toFixed(2)} ${order.currency}`,
         priceAmount: parseFloat(item.price),
-        image: item.image_url || item.product_image || 'https://via.placeholder.com/80',
+        image: item.image_url || item.product_image || '',
         sku: item.sku
       })),
       
@@ -447,15 +447,24 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       );
     }
     
-    // Add note to order
+    // Add a note to the order
     const noteData = {
       note: {
-        note: `تم رفع إيصال الدفع من قبل العميل`,
+        note: `✅ تم رفع إيصال الدفع من قبل العميل - ${req.file.originalname}`,
         created_at: new Date().toISOString()
       }
     };
     
-    // You might want to add a note or tag to the order
+    try {
+      await makeShopifyRequest(
+        `orders/${order.id}/notes.json`,
+        'POST',
+        noteData
+      );
+    } catch (noteError) {
+      console.log('⚠️ Could not add note to order:', noteError.message);
+    }
+    
     console.log('✅ Payment slip uploaded successfully');
     
     res.json({
@@ -464,7 +473,7 @@ app.post('/api/order/:orderNumber/upload-payment', upload.single('paymentSlip'),
       file: {
         name: req.file.originalname,
         size: req.file.size,
-        uploadedAt: fileData.uploadedAt
+        uploadedAt: new Date().toISOString()
       }
     });
     
