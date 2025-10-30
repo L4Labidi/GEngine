@@ -539,6 +539,103 @@ app.post('/api/order/:orderNumber/confirm-payment', async (req, res) => {
   }
 });
 
+// GET payment slip image
+app.get('/api/order/:orderNumber/payment-slip-image', async (req, res) => {
+  console.log('\n--- Get Payment Slip Image ---');
+  const { orderNumber } = req.params;
+  
+  try {
+    const cleanOrderNumber = orderNumber.replace('#', '');
+    const ordersResponse = await makeShopifyRequest(
+      `orders.json?name=${cleanOrderNumber}&status=any`
+    );
+    
+    if (!ordersResponse.orders || ordersResponse.orders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'لم يتم العثور على الطلب'
+      });
+    }
+    
+    const order = ordersResponse.orders[0];
+    
+    // Get payment slip metafield
+    const metafields = await makeShopifyRequest(
+      `orders/${order.id}/metafields.json`
+    );
+    
+    const paymentSlipMetafield = metafields.metafields.find(
+      mf => mf.namespace === 'custom' && mf.key === 'payment_slip_image'
+    );
+    
+    if (!paymentSlipMetafield || !paymentSlipMetafield.value) {
+      return res.status(404).json({
+        success: false,
+        error: 'لم يتم العثور على إيصال الدفع'
+      });
+    }
+    
+    // The metafield value contains the file reference (GID)
+    // We need to fetch the file details from Shopify using GraphQL
+    const fileGid = paymentSlipMetafield.value;
+    
+    // Extract file ID from GID (format: gid://shopify/MediaImage/123456789)
+    const fileIdMatch = fileGid.match(/\/(\d+)$/);
+    if (!fileIdMatch) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid file reference format'
+      });
+    }
+    
+    const fileId = fileIdMatch[1];
+    
+    // Fetch file details using REST API
+    try {
+      const fileResponse = await makeShopifyGraphQLRequest(`
+        query {
+          node(id: "${fileGid}") {
+            ... on MediaImage {
+              id
+              image {
+                url
+                altText
+              }
+            }
+          }
+        }
+      `);
+      
+      if (fileResponse.data && fileResponse.data.node && fileResponse.data.node.image) {
+        return res.json({
+          success: true,
+          imageUrl: fileResponse.data.node.image.url,
+          fileId: fileId
+        });
+      }
+    } catch (graphqlError) {
+      console.log('GraphQL failed, trying alternative method:', graphqlError.message);
+    }
+    
+    // Alternative: Return the file reference and let frontend handle it
+    // or try to construct a CDN URL
+    res.json({
+      success: true,
+      imageUrl: null,
+      fileId: fileId,
+      fileReference: fileGid,
+      message: 'File reference found but URL not available'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching payment slip image:', error.message);
+    res.status(500).json({
+      success: false,
+      error: 'حدث خطأ أثناء جلب صورة الإيصال'
+    });
+  }
+});
+
 // POST cancel order
 app.post('/api/order/:orderNumber/cancel', async (req, res) => {
   console.log('\n--- Cancel Order ---');
